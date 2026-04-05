@@ -7,7 +7,7 @@ process FASTQC {
     tag "${sample_id}"
     publishDir "${params.outdir}/fastqc/${sample_id}", mode: 'copy'
 
-    container 'staphb/fastqc:0.12.1'
+    container 'quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0'
 
     input:
     tuple val(sample_id), path(reads)
