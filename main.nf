@@ -7,7 +7,7 @@ process FASTQC {
     tag "${sample_id}"
     publishDir "${params.outdir}/fastqc/${sample_id}", mode: 'copy'
 
-    container 'community.wave.seqera.io/library/fastqc:0.12.1--18e2f81b9c3b569e'
+    container 'staphb/fastqc:0.12.1'
 
     input:
     tuple val(sample_id), path(reads)
