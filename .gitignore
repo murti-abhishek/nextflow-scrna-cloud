@@ -4,3 +4,5 @@ data/pbmc_1k_v3_fastqs/
 work/
 .nextflow/
 .nextflow.log*
+.DS_Store
+nf-*.tsv

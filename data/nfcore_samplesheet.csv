@@ -1,0 +1,3 @@
+sample,fastq_1,fastq_2,expected_cells
+pbmc_1k,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L001_R1_001.fastq.gz,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L001_R2_001.fastq.gz,1000
+pbmc_1k,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L002_R1_001.fastq.gz,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L002_R2_001.fastq.gz,1000

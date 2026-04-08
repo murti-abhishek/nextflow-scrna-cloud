@@ -183,3 +183,20 @@ The biggest mental shift: **on HPC you go to the data; on cloud the data comes t
 
 2 lanes × paired R1/R2 reads, ~5GB total. Used for benchmarking pipeline parallelism across samples.
 
+## Benchmarks
+
+### nf-core/scrnaseq — PBMC 1k v3 (GRCh38, STARsolo)
+
+| Metric | Value |
+|---|---|
+| Total reads | 66.6M |
+| Uniquely mapped | 87.74% |
+| Alignment throughput | 322M reads/hour |
+| Alignment time | 12m 24s |
+| Total pipeline duration | 58m 52s |
+| Total CPU hours | 10.7 |
+| Instance type | r6i.4xlarge (spot) |
+| Estimated cost | ~$4–6 |
+
+Pipeline ran on AWS Batch with Fusion filesystem and spot instances.
+STAR genome index cached to S3 for subsequent runs.
