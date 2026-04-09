@@ -1,3 +1,2 @@
-sample_id,fastq_r1,fastq_r2
-pbmc_1k_L001,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L001_R1_001.fastq.gz,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L001_R2_001.fastq.gz
-pbmc_1k_L002,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L002_R1_001.fastq.gz,s3://nextflow-scrna-abhishek/raw/pbmc_1k/pbmc_1k_v3_S1_L002_R2_001.fastq.gz
+sample_id,h5ad
+pbmc_1k,s3://nextflow-scrna-abhishek/results/nfcore_scrnaseq/star/mtx_conversions/pbmc_1k/pbmc_1k_filtered_matrix.h5ad
