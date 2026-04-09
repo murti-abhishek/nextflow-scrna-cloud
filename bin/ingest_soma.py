@@ -67,6 +67,7 @@ def main():
         experiment_uri,
         adata,
         measurement_name="RNA",
+        ingest_mode="resume",
     )
     log.info("Ingestion complete")
 

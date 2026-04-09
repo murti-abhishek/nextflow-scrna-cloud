@@ -1,8 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-include { FASTQC    } from './modules/fastqc/main'
-include { SCANPY_QC } from './modules/scanpy_qc/main'
+include { FASTQC     } from './modules/fastqc/main'
+include { SCANPY_QC  } from './modules/scanpy_qc/main'
+include { INGEST_SOMA } from './modules/ingest_soma/main'
 
 workflow {
     input_ch = channel.fromPath(params.input)
@@ -18,4 +19,5 @@ workflow {
 
     FASTQC(fastq_ch)
     SCANPY_QC(h5ad_ch)
+    INGEST_SOMA(SCANPY_QC.out.h5ad)
 }
