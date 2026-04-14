@@ -51,19 +51,18 @@ class SOMAIterableDataset(IterableDataset):
         self._gene_to_token = None
 
     def _build_gene_index(self, var_df):
-        """
-        Map SOMA var (gene) dataframe to token IDs using vocab.
-        Genes not in vocab get token_id = -1 (will be filtered out).
-        """
-        gene_names = var_df["gene_symbol"].values \
-            if "gene_symbol" in var_df.columns \
-            else var_df.index.values
+        gene_names = None
+        for col in ['gene_symbol', 'gene_name', 'feature_name']:
+            if col in var_df.columns:
+                gene_names = var_df[col].values
+                break
+        if gene_names is None:
+            gene_names = var_df.index.values
 
         token_ids = np.array([
             self.vocab.get(g, -1) for g in gene_names
         ], dtype=np.int32)
-
-        return token_ids  # shape: (n_genes,)
+        return token_ids
 
     def _rank_tokenize(self, counts_row, gene_token_ids):
         """
@@ -179,27 +178,87 @@ def make_soma_dataloader(
         pin_memory=torch.cuda.is_available(),
     )
 
+def make_perturb_soma_dataloader(
+    soma_uri: str,
+    vocab_path: str,
+    target_gene: str = None,
+    controls_only: bool = False,
+    batch_size: int = 256,
+    seq_len: int = 1024,
+    layer: str = "counts",
+    num_workers: int = 0,
+) -> DataLoader:
+    """
+    Perturbation-aware DataLoader. Streams cells from a Perturb-seq SOMA atlas
+    filtered by perturbation target — for conditioning models on perturbation identity.
+
+    Usage:
+        # All RPL3 knockdown cells
+        loader = make_perturb_soma_dataloader(
+            soma_uri   = "s3://bucket/atlas/K562_essential",
+            vocab_path = "data/vocab_v05.json",
+            target_gene = "RPL3",
+        )
+
+        # All non-targeting control cells
+        loader = make_perturb_soma_dataloader(
+            soma_uri      = "s3://bucket/atlas/K562_essential",
+            vocab_path    = "data/vocab_v05.json",
+            controls_only = True,
+        )
+    """
+    if controls_only:
+        value_filter = "is_control == True"
+    elif target_gene:
+        value_filter = f"target_gene == '{target_gene}'"
+    else:
+        value_filter = None
+
+    return make_soma_dataloader(
+        soma_uri     = soma_uri,
+        vocab_path   = vocab_path,
+        batch_size   = batch_size,
+        seq_len      = seq_len,
+        layer        = layer,
+        value_filter = value_filter,
+        num_workers  = num_workers,
+    )
 
 # ── Quick smoke test ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--soma-uri",   required=True)
-    parser.add_argument("--vocab-path", required=True)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--seq-len",    type=int, default=1024)
-    parser.add_argument("--n-batches",  type=int, default=3,
-                        help="Number of batches to test")
+    parser.add_argument("--soma-uri",    required=True)
+    parser.add_argument("--vocab-path",  required=True)
+    parser.add_argument("--batch-size",  type=int, default=32)
+    parser.add_argument("--seq-len",     type=int, default=1024)
+    parser.add_argument("--n-batches",   type=int, default=3)
+    parser.add_argument("--target-gene", type=str, default=None,
+                        help="Filter to specific perturbation target")
+    parser.add_argument("--controls-only", action="store_true",
+                        help="Only stream non-targeting control cells")
     args = parser.parse_args()
 
     print(f"Loading SOMA atlas from {args.soma_uri}")
-    loader = make_soma_dataloader(
-        soma_uri   = args.soma_uri,
-        vocab_path = args.vocab_path,
-        batch_size = args.batch_size,
-        seq_len    = args.seq_len,
-    )
+
+    if args.target_gene or args.controls_only:
+        print(f"Filter: {'controls only' if args.controls_only else f'target_gene = {args.target_gene}'}")
+        loader = make_perturb_soma_dataloader(
+            soma_uri      = args.soma_uri,
+            vocab_path    = args.vocab_path,
+            target_gene   = args.target_gene,
+            controls_only = args.controls_only,
+            batch_size    = args.batch_size,
+            seq_len       = args.seq_len,
+        )
+    else:
+        loader = make_soma_dataloader(
+            soma_uri   = args.soma_uri,
+            vocab_path = args.vocab_path,
+            batch_size = args.batch_size,
+            seq_len    = args.seq_len,
+        )
 
     for i, (input_ids, attention_mask) in enumerate(loader):
         if i >= args.n_batches:
@@ -208,7 +267,6 @@ if __name__ == "__main__":
         print(f"  input_ids shape:      {input_ids.shape}")
         print(f"  attention_mask shape: {attention_mask.shape}")
         print(f"  tokens per cell:      {attention_mask.sum(dim=1).float().mean():.1f} avg")
-        print(f"  input_ids dtype:      {input_ids.dtype}")
-        print(f"  sample tokens:        {input_ids[0, :10]}")
+        print(f"  sample tokens:        {input_ids[0, :8]}")
 
-    print("\nDone — DataLoader is working.")
+    print("\nDone.")
