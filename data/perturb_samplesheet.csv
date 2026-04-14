@@ -1,0 +1,2 @@
+sample_id,perturb_h5ad
+K562_essential,s3://nextflow-scrna-abhishek/raw/replogle/K562_essential_subset_50k.h5ad

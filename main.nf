@@ -3,6 +3,7 @@ nextflow.enable.dsl=2
 
 include { FASTQC     } from './modules/fastqc/main'
 include { SCANPY_QC  } from './modules/scanpy_qc/main'
+include { PERTURB_QC  } from './modules/perturb_qc/main'
 include { INGEST_SOMA } from './modules/ingest_soma/main'
 
 workflow {
@@ -17,7 +18,12 @@ workflow {
         .filter { row -> row.containsKey('h5ad') }
         .map { row -> tuple(row.sample_id, file(row.h5ad)) }
 
+    perturb_ch = input_ch
+    .filter { row -> row.containsKey('perturb_h5ad') }
+    .map { row -> tuple(row.sample_id, file(row.perturb_h5ad)) }
+
     FASTQC(fastq_ch)
     SCANPY_QC(h5ad_ch)
-    INGEST_SOMA(SCANPY_QC.out.h5ad)
+    PERTURB_QC(perturb_ch)
+    INGEST_SOMA(PERTURB_QC.out.h5ad)
 }
