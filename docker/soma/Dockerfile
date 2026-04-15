@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir \
     anndata==0.11.2 \
     pandas==2.2.2 \
     numpy==1.26.4 \
-    more-itertools
+    more-itertools \
+    boto3
 
 COPY bin/ingest_soma.py /usr/local/bin/ingest_soma.py
 RUN chmod +x /usr/local/bin/ingest_soma.py

@@ -1,10 +1,14 @@
 process INGEST_SOMA {
     tag "${sample_id}"
 
-    container 'murtiabhishek/soma-ingest:1.0.1'
+    container 'murtiabhishek/soma-ingest:1.0.2'
 
-    cpus   2
-    memory '8 GB'
+    cpus   4
+    memory { 32.GB * task.attempt }
+    time   '2h'
+
+    errorStrategy { task.exitStatus in [137, 143] ? 'retry' : 'finish' }
+    maxRetries 3
 
     input:
     tuple val(sample_id), path(h5ad)

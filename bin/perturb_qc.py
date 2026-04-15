@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
 perturb_qc.py — Perturbation-aware QC and preprocessing for Perturb-seq data
-Input:  raw single-cell H5AD with perturbation identity already in obs
+Input:  raw single-cell H5AD (full dataset, loaded in backed mode)
 Output: clean H5AD with perturbation metadata, ready for SOMA ingestion
 """
-import sys
-from unittest.mock import MagicMock
-sys.modules['numba'] = MagicMock()
 
 import argparse
 import logging
@@ -23,20 +20,17 @@ def parse_args():
     parser.add_argument('--input',                   required=True)
     parser.add_argument('--output',                  required=True)
     parser.add_argument('--sample-id',               required=True)
-    parser.add_argument('--n-top-perturbs',          type=int, default=50)
     parser.add_argument('--min-cells-per-perturb',   type=int, default=20)
     parser.add_argument('--min-genes',               type=int, default=200)
     parser.add_argument('--max-genes',               type=int, default=8000)
     parser.add_argument('--max-mito',                type=float, default=25.0)
     parser.add_argument('--min-counts',              type=int, default=500)
     parser.add_argument('--n-hvgs',                  type=int, default=2000)
+    parser.add_argument('--target-genes',            type=str, default=None,
+                        help='Comma-separated list of target genes to include. Default: all.')
     return parser.parse_args()
 
 def parse_perturbation_metadata(obs):
-    """
-    Extract perturbation metadata from Replogle 2022 single-cell obs.
-    Guide identity is already assigned — just clean and standardize.
-    """
     meta = pd.DataFrame(index=obs.index)
     meta['target_gene']     = obs['gene']
     meta['guide_id']        = obs['transcript'] if 'transcript' in obs.columns else 'unknown'
@@ -48,39 +42,49 @@ def main():
     args = parse_args()
     sc.settings.verbosity = 2
 
-    # ── 1. Load ──────────────────────────────────────────────────────────────
-    log.info(f"Loading {args.input}")
-    adata = sc.read_h5ad(args.input)
+    # ── 1. Load obs only (backed mode) ───────────────────────────────────────
+    log.info(f"Reading obs metadata from {args.input} (backed mode)")
+    adata_backed = ad.read_h5ad(args.input, backed='r')
+    log.info(f"Full dataset: {adata_backed.n_obs} cells × {adata_backed.n_vars} genes")
+
+    # ── 2. Parse perturbation metadata from obs ───────────────────────────────
+    log.info("Parsing perturbation metadata")
+    perturb_meta = parse_perturbation_metadata(adata_backed.obs)
+
+    # ── 3. Identify cells to keep ─────────────────────────────────────────────
+    if args.target_genes:
+        target_list = [t.strip() for t in args.target_genes.split(',')]
+        log.info(f"Filtering to {len(target_list)} specified targets + controls")
+        keep_mask = (
+            perturb_meta['is_control'] |
+            perturb_meta['target_gene'].isin(target_list)
+        )
+    else:
+        log.info("Processing all perturbation targets")
+        keep_mask = pd.Series(True, index=perturb_meta.index)
+
+    cell_indices = np.where(keep_mask.values)[0]
+    log.info(f"Cells to load into memory: {len(cell_indices)}")
+
+    # ── 4. Load subset into memory ────────────────────────────────────────────
+    log.info("Loading selected cells into memory...")
+    adata = adata_backed[cell_indices].to_memory()
+    adata_backed.file.close()
     adata.var_names_make_unique()
     log.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
-    # ── 2. Parse perturbation metadata ───────────────────────────────────────
-    log.info("Parsing perturbation metadata")
-    perturb_meta = parse_perturbation_metadata(adata.obs)
+    # ── 5. Attach perturbation metadata ───────────────────────────────────────
+    perturb_sub = perturb_meta.iloc[cell_indices]
     for col in ['target_gene', 'guide_id', 'perturbation_id', 'is_control']:
-        adata.obs[col] = perturb_meta[col].values
+        adata.obs[col] = perturb_sub[col].values
 
-    n_controls = adata.obs['is_control'].sum()
+    n_controls  = adata.obs['is_control'].sum()
     n_perturbed = (~adata.obs['is_control']).sum()
-    n_targets = adata.obs[~adata.obs['is_control']]['target_gene'].nunique()
-    log.info(f"Control cells: {n_controls}")
+    n_targets   = adata.obs[~adata.obs['is_control']]['target_gene'].nunique()
+    log.info(f"Control cells:   {n_controls}")
     log.info(f"Perturbed cells: {n_perturbed} across {n_targets} unique targets")
 
-    # ── 3. Subset to manageable size ─────────────────────────────────────────
-    log.info(f"Subsetting to top {args.n_top_perturbs} perturbations + all controls")
-    perturb_counts = (
-        adata.obs[~adata.obs['is_control']]
-        .groupby('target_gene')
-        .size()
-        .sort_values(ascending=False)
-        .head(args.n_top_perturbs)
-    )
-    top_targets = set(perturb_counts.index)
-    keep_mask = adata.obs['is_control'] | adata.obs['target_gene'].isin(top_targets)
-    adata = adata[keep_mask].copy()
-    log.info(f"After subset: {adata.n_obs} cells")
-
-    # ── 4. QC metrics ────────────────────────────────────────────────────────
+    # ── 6. QC metrics ─────────────────────────────────────────────────────────
     log.info("Computing QC metrics")
     adata.var['mt'] = adata.var_names.str.startswith('MT-')
     sc.pp.calculate_qc_metrics(
@@ -91,7 +95,7 @@ def main():
     log.info(f"  median UMIs/cell:  {np.median(adata.obs.total_counts):.0f}")
     log.info(f"  median mito %:     {np.median(adata.obs.pct_counts_mt):.1f}%")
 
-    # ── 5. Cell filtering ────────────────────────────────────────────────────
+    # ── 7. Cell filtering ─────────────────────────────────────────────────────
     sc.pp.filter_cells(adata, min_genes=args.min_genes)
     sc.pp.filter_cells(adata, max_genes=args.max_genes)
     sc.pp.filter_genes(adata, min_cells=3)
@@ -99,9 +103,9 @@ def main():
     adata = adata[adata.obs.total_counts > args.min_counts].copy()
     log.info(f"Post-filter: {adata.n_obs} cells")
 
-    # ── 6. Perturbation-aware QC ─────────────────────────────────────────────
+    # ── 8. Perturbation-aware QC ──────────────────────────────────────────────
     log.info("Running perturbation-aware QC")
-    cells_per_perturb = adata.obs.groupby('target_gene').size()
+    cells_per_perturb = adata.obs.groupby('target_gene', observed=True).size()
     valid_targets = cells_per_perturb[
         cells_per_perturb >= args.min_cells_per_perturb
     ].index
@@ -109,12 +113,12 @@ def main():
     adata = adata[adata.obs['target_gene'].isin(valid_targets)].copy()
     log.info(f"Dropped {n_dropped} cells from low-coverage perturbations")
     log.info(f"Remaining targets: {adata.obs['target_gene'].nunique()}")
-    log.info(f"Final cell count: {adata.n_obs}")
+    log.info(f"Final cell count:  {adata.n_obs}")
 
-    # ── 7. Store raw counts ───────────────────────────────────────────────────
+    # ── 9. Store raw counts ───────────────────────────────────────────────────
     adata.layers['counts'] = adata.X.copy()
 
-    # ── 8. Normalize to median library size ──────────────────────────────────
+    # ── 10. Normalize to median library size ──────────────────────────────────
     median_lib_size = float(np.median(adata.obs.total_counts))
     log.info(f"Normalizing to median library size: {median_lib_size:.0f} UMIs")
     sc.pp.normalize_total(adata, target_sum=median_lib_size)
@@ -125,19 +129,16 @@ def main():
         'target_sum': median_lib_size,
     }
 
-    # ── 9. HVGs + PCA + UMAP ─────────────────────────────────────────────────
-    log.info("HVG selection, PCA, UMAP")
-    sc.pp.highly_variable_genes(adata, n_top_genes=args.n_hvgs)
-    # adata = adata[:, adata.var['highly_variable']].copy()
-    # sc.pp.scale(adata, max_value=10)
+    # ── 11. HVGs + PCA ────────────────────────────────────────────────────────
+    log.info("HVG selection and PCA")
+    sc.pp.highly_variable_genes(adata, n_top_genes=args.n_hvgs, subset=False)
+    adata = adata[:, adata.var['highly_variable']].copy()
+    sc.pp.scale(adata, max_value=10)
     sc.tl.pca(adata, n_comps=50)
-    # sc.pp.neighbors(adata, n_neighbors=15, n_pcs=50)
-    # sc.tl.umap(adata)
-    # sc.tl.leiden(adata, resolution=0.5)
 
-    # ── 10. Perturbation summary stats ────────────────────────────────────────
+    # ── 12. Perturbation summary stats ────────────────────────────────────────
     log.info("Computing per-perturbation summary stats")
-    summary = adata.obs.groupby('target_gene').agg(
+    summary = adata.obs.groupby('target_gene', observed=True).agg(
         n_cells=('target_gene', 'count'),
         mean_genes=('n_genes_by_counts', 'mean'),
         mean_umis=('total_counts', 'mean'),
@@ -145,7 +146,7 @@ def main():
     ).reset_index()
     adata.uns['perturbation_summary'] = summary.to_dict(orient='list')
 
-    # ── 11. Metadata ──────────────────────────────────────────────────────────
+    # ── 13. Metadata ──────────────────────────────────────────────────────────
     adata.obs['sample_id'] = args.sample_id
     adata.obs['tissue']    = 'blood'
     adata.obs['organism']  = 'Homo sapiens'
@@ -154,7 +155,7 @@ def main():
     adata.obs['dataset']   = 'Replogle_2022_essential'
     adata.uns['qc_params'] = vars(args)
 
-    # ── 12. Save ──────────────────────────────────────────────────────────────
+    # ── 14. Save ──────────────────────────────────────────────────────────────
     log.info(f"Saving to {args.output}")
     adata.write_h5ad(args.output, compression='gzip')
     log.info("Done")

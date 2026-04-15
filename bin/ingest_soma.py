@@ -7,6 +7,8 @@ Output: TileDB-SOMA experiment written to S3
 
 import argparse
 import logging
+from urllib.parse import urlparse
+import boto3
 import anndata as ad
 import tiledbsoma as soma
 import tiledbsoma.io as soma_io
@@ -16,35 +18,43 @@ log = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input',       required=True, help='Input clean .h5ad file')
-    parser.add_argument('--uri',         required=True, help='S3 URI for SOMA collection')
-    parser.add_argument('--sample-id',   required=True, help='Sample identifier')
-    parser.add_argument('--tissue',      default='blood',   help='Tissue type')
-    parser.add_argument('--organism',    default='Homo sapiens', help='Organism')
-    parser.add_argument('--assay',       default='10x 3v3', help='Assay type')
+    parser.add_argument('--input',     required=True, help='Input clean .h5ad file')
+    parser.add_argument('--uri',       required=True, help='S3 URI for SOMA collection')
+    parser.add_argument('--sample-id', required=True, help='Sample identifier')
+    parser.add_argument('--tissue',    default='blood',        help='Tissue type')
+    parser.add_argument('--organism',  default='Homo sapiens', help='Organism')
+    parser.add_argument('--assay',     default='10x 3v3',      help='Assay type')
     return parser.parse_args()
 
+def delete_s3_prefix(uri):
+    """Delete all objects under an S3 URI prefix."""
+    parsed = urlparse(uri)
+    bucket = parsed.netloc
+    prefix = parsed.path.lstrip('/')
+    s3 = boto3.client('s3')
+    paginator = s3.get_paginator('list_objects_v2')
+    total = 0
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        if 'Contents' in page:
+            keys = [{'Key': obj['Key']} for obj in page['Contents']]
+            s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+            total += len(keys)
+    if total:
+        log.info(f"Deleted {total} existing objects from {uri}")
+
 def validate_metadata(adata, sample_id, tissue, organism):
-    """Enforce required metadata fields before ingestion."""
     log.info("Validating metadata")
-
-    # Add required fields if missing
-    adata.obs['sample_id']  = sample_id
-    adata.obs['tissue']     = tissue
-    adata.obs['organism']   = organism
-
-    # Ensure string types for categorical fields
+    adata.obs['sample_id'] = sample_id
+    adata.obs['tissue']    = tissue
+    adata.obs['organism']  = organism
     for col in ['sample_id', 'tissue', 'organism']:
         adata.obs[col] = adata.obs[col].astype(str)
-
-    # Validate gene IDs exist
     assert adata.n_vars > 0, "No genes found"
     assert adata.n_obs  > 0, "No cells found"
-
     log.info(f"Validated: {adata.n_obs} cells × {adata.n_vars} genes")
     log.info(f"  tissue:   {tissue}")
     log.info(f"  organism: {organism}")
-    log.info(f"  assay:    {adata.uns.get('assay', 'unknown')}")
+    log.info(f"  assay:    {adata.obs['assay'].iloc[0] if 'assay' in adata.obs.columns else 'unknown'}")
     return adata
 
 def main():
@@ -58,20 +68,23 @@ def main():
     # ── 2. Validate metadata ─────────────────────────────────────────────────
     adata = validate_metadata(adata, args.sample_id, args.tissue, args.organism)
 
-    # ── 3. Set experiment URI inside the collection ──────────────────────────
+    # ── 3. Set experiment URI ─────────────────────────────────────────────────
     experiment_uri = f"{args.uri}/{args.sample_id}"
     log.info(f"Writing SOMA experiment to {experiment_uri}")
 
-    # ── 4. Ingest ────────────────────────────────────────────────────────────
+    # ── 4. Clean existing experiment if present ───────────────────────────────
+    delete_s3_prefix(experiment_uri)
+
+    # ── 5. Ingest ────────────────────────────────────────────────────────────
     soma_io.from_anndata(
         experiment_uri,
         adata,
         measurement_name="RNA",
-        ingest_mode="resume",
+        ingest_mode="write",
     )
     log.info("Ingestion complete")
 
-    # ── 5. Verify ────────────────────────────────────────────────────────────
+    # ── 6. Verify ────────────────────────────────────────────────────────────
     log.info("Verifying SOMA experiment is queryable")
     with soma.Experiment.open(experiment_uri) as exp:
         obs_count = len(exp.obs.read().concat())
